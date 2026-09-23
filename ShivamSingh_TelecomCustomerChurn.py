@@ -82,18 +82,27 @@ def load_data(path: str = DATASET_PATH) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 @st.cache_data(show_spinner=False)
-def clean_data(df: pd.DataFrame) -> pd.DataFrame:
+def clean_data(df: pd.DataFrame) -> tuple:
     """
-    Cleaning steps:
+    Cleaning steps with full audit trail:
       1. Strip whitespace from column names and string values.
-      2. Convert TotalCharges to numeric (some rows have ' ' strings).
-      3. Drop rows where TotalCharges is still NaN after conversion.
-      4. Encode target variable: Churn -> 0/1.
-      5. Drop customerID (not a predictor).
-      6. Remove exact duplicate rows.
+      2. Convert TotalCharges to numeric (blank strings → NaN).
+      3. Drop rows where TotalCharges is NaN after conversion.
+         These are customers with tenure=0 who have never been billed —
+         their TotalCharges field contains a single space ' ' in the CSV,
+         which pandas cannot convert to float.
+      4. Encode target variable: Churn Yes→1, No→0.
+      5. Drop customerID (unique identifier, not a predictor).
+      6. Remove exact duplicate rows (all 19 columns identical).
       7. Ensure SeniorCitizen is int.
+
+    Returns: (cleaned_df, cleaning_log dict)
+    The cleaning_log records every row-removal step so the UI can
+    display an explicit data provenance table.
     """
     df = df.copy()
+    log = {}
+    log["raw_rows"] = len(df)
 
     # Step 1 – strip whitespace
     df.columns = df.columns.str.strip()
@@ -103,10 +112,15 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     # Step 2 – TotalCharges to numeric
     df["TotalCharges"] = pd.to_numeric(df["TotalCharges"], errors="coerce")
 
-    # Step 3 – drop NaN TotalCharges (11 rows with ' ')
-    before = len(df)
+    # Step 3 – drop NaN TotalCharges
+    # Customers with tenure=0 have a blank TotalCharges field in the
+    # source CSV.  pd.to_numeric converts that blank to NaN, which we
+    # then drop.  These 11 rows represent brand-new accounts that have
+    # never completed a billing cycle, so they carry no churn signal.
+    before_tc = len(df)
     df.dropna(subset=["TotalCharges"], inplace=True)
-    dropped = before - len(df)
+    log["dropped_blank_totalcharges"] = before_tc - len(df)
+    log["after_totalcharges_drop"] = len(df)
 
     # Step 4 – encode target
     df[TARGET_COL] = df[TARGET_COL].map({"Yes": 1, "No": 0})
@@ -116,13 +130,16 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df.drop(columns=[col], inplace=True)
 
-    # Step 6 – remove duplicates
+    # Step 6 – remove duplicates (all feature columns identical)
+    before_dup = len(df)
     df.drop_duplicates(inplace=True)
+    log["dropped_duplicates"] = before_dup - len(df)
+    log["final_rows"] = len(df)
 
     # Step 7 – SeniorCitizen as int
     df["SeniorCitizen"] = df["SeniorCitizen"].astype(int)
 
-    return df
+    return df, log
 
 # ---------------------------------------------------------------------------
 # 3. EXPLORATORY DATA ANALYSIS HELPERS
@@ -313,66 +330,127 @@ def get_feature_importance(pipeline, cat_cols: list, num_cols: list) -> pd.DataF
 def generate_business_insights(df: pd.DataFrame, kpis: dict, fi_df: pd.DataFrame, pred_df: pd.DataFrame) -> dict:
     """
     Auto-generate executive insights from the data.
-    All numerical statements come from the dataset — no hard-coding.
+    Every numerical statement is computed from the cleaned dataset at
+    runtime.  No values are hard-coded.  Where a claim involves the ML
+    model (risk counts, revenue at risk) the text explicitly says so.
     """
-    # Contract analysis
+    # --- Contract analysis ---
     contract_churn = churn_rate_by(df, "Contract")
-    highest_churn_contract = contract_churn.loc[contract_churn["ChurnRate"].idxmax(), "Contract"]
+    highest_churn_contract      = contract_churn.loc[contract_churn["ChurnRate"].idxmax(), "Contract"]
     highest_churn_contract_rate = contract_churn["ChurnRate"].max()
+    # Lowest-churn contract for comparison
+    lowest_churn_contract       = contract_churn.loc[contract_churn["ChurnRate"].idxmin(), "Contract"]
+    lowest_churn_contract_rate  = contract_churn["ChurnRate"].min()
 
-    # Tenure analysis – low tenure churn
-    df_lt12 = df[df["tenure"] <= 12]
+    # --- Tenure analysis ---
+    df_lt12  = df[df["tenure"] <= 12]
+    df_gt24  = df[df["tenure"] >  24]
     short_tenure_churn = df_lt12[TARGET_COL].mean() * 100
+    long_tenure_churn  = df_gt24[TARGET_COL].mean() * 100
+    short_tenure_n     = len(df_lt12)
 
-    # Internet service analysis
+    # --- Internet service analysis ---
     internet_churn = churn_rate_by(df, "InternetService")
     highest_internet_service = internet_churn.loc[internet_churn["ChurnRate"].idxmax(), "InternetService"]
-    highest_internet_rate = internet_churn["ChurnRate"].max()
+    highest_internet_rate    = internet_churn["ChurnRate"].max()
+    lowest_internet_service  = internet_churn.loc[internet_churn["ChurnRate"].idxmin(), "InternetService"]
+    lowest_internet_rate     = internet_churn["ChurnRate"].min()
 
-    # Senior citizen churn
-    senior_churn = df[df["SeniorCitizen"] == 1][TARGET_COL].mean() * 100
+    # --- Senior citizen analysis ---
+    senior_churn     = df[df["SeniorCitizen"] == 1][TARGET_COL].mean() * 100
     non_senior_churn = df[df["SeniorCitizen"] == 0][TARGET_COL].mean() * 100
 
-    # Top churn driver
+    # --- Tech support / online security (actual churn rates, no vague words) ---
+    ts_churn    = churn_rate_by(df, "TechSupport")
+    ts_no_rate  = float(ts_churn.loc[ts_churn["TechSupport"] == "No",  "ChurnRate"].values[0]) \
+                  if "No" in ts_churn["TechSupport"].values else float("nan")
+    ts_yes_rate = float(ts_churn.loc[ts_churn["TechSupport"] == "Yes", "ChurnRate"].values[0]) \
+                  if "Yes" in ts_churn["TechSupport"].values else float("nan")
+
+    sec_churn    = churn_rate_by(df, "OnlineSecurity")
+    sec_no_rate  = float(sec_churn.loc[sec_churn["OnlineSecurity"] == "No",  "ChurnRate"].values[0]) \
+                   if "No" in sec_churn["OnlineSecurity"].values else float("nan")
+    sec_yes_rate = float(sec_churn.loc[sec_churn["OnlineSecurity"] == "Yes", "ChurnRate"].values[0]) \
+                   if "Yes" in sec_churn["OnlineSecurity"].values else float("nan")
+
+    # --- Top churn driver (state model and method explicitly) ---
     top_feature = fi_df.iloc[0]["OriginalFeature"] if not fi_df.empty else "tenure"
 
-    # Revenue at risk
-    high_risk = pred_df[pred_df["RiskCategory"] == "High Risk"]
+    # --- Model-predicted risk counts and revenue ---
+    # NOTE: these figures are outputs of the ML model, not observed churn counts.
+    # "High Risk" = model-predicted churn probability > MEDIUM_RISK_THRESHOLD.
+    high_risk       = pred_df[pred_df["RiskCategory"] == "High Risk"]
     revenue_at_risk = high_risk["MonthlyCharges"].sum()
     high_risk_count = len(high_risk)
 
-    # Payment method churn
-    pay_churn = churn_rate_by(df, "PaymentMethod")
+    # --- Payment method churn ---
+    pay_churn          = churn_rate_by(df, "PaymentMethod")
     highest_pay_method = pay_churn.loc[pay_churn["ChurnRate"].idxmax(), "PaymentMethod"]
-    highest_pay_rate = pay_churn["ChurnRate"].max()
+    highest_pay_rate   = pay_churn["ChurnRate"].max()
+    lowest_pay_method  = pay_churn.loc[pay_churn["ChurnRate"].idxmin(), "PaymentMethod"]
+    lowest_pay_rate    = pay_churn["ChurnRate"].min()
 
-    # Retention opportunity – loyal customers (tenure > 24, no churn)
-    loyal = df[(df["tenure"] > 24) & (df[TARGET_COL] == 0)]
+    # --- Long-tenure retained customers ---
+    loyal       = df[(df["tenure"] > 24) & (df[TARGET_COL] == 0)]
     loyal_count = len(loyal)
 
     insights = {
         "key_findings": [
-            f"Customers on {highest_churn_contract} contracts have the highest churn rate at {highest_churn_contract_rate:.1f}%.",
-            f"Customers with tenure ≤ 12 months churn at {short_tenure_churn:.1f}% — early-stage retention is critical.",
-            f"{highest_internet_service} internet service customers show the highest churn rate at {highest_internet_rate:.1f}%.",
-            f"Senior citizens churn at {senior_churn:.1f}% compared to {non_senior_churn:.1f}% for non-seniors.",
-            f"'{top_feature}' is the strongest predictor of churn based on model feature importance.",
+            (f"Customers on {highest_churn_contract} contracts have the highest observed churn rate "
+             f"at {highest_churn_contract_rate:.1f}% vs {lowest_churn_contract_rate:.1f}% for "
+             f"{lowest_churn_contract} contracts (calculated from {len(df):,} cleaned records)."),
+            (f"Of {short_tenure_n:,} customers with tenure ≤ 12 months, {short_tenure_churn:.1f}% "
+             f"have churned, compared to {long_tenure_churn:.1f}% for customers with tenure > 24 months."),
+            (f"{highest_internet_service} internet service customers show the highest observed churn "
+             f"rate at {highest_internet_rate:.1f}%, compared to {lowest_internet_rate:.1f}% for "
+             f"{lowest_internet_service} service."),
+            (f"Senior citizens (SeniorCitizen=1) show a churn rate of {senior_churn:.1f}% vs "
+             f"{non_senior_churn:.1f}% for non-seniors — a difference of "
+             f"{abs(senior_churn - non_senior_churn):.1f} percentage points."),
+            (f"'{top_feature}' has the highest aggregated feature importance score in the trained "
+             f"model (scores reflect Mean Decrease in Impurity for Random Forest, or |coefficient| "
+             f"for Logistic Regression — these indicate association, not causation)."),
         ],
         "risks": [
-            f"{high_risk_count:,} customers ({high_risk_count/len(df)*100:.1f}%) are classified as High Risk with churn probability > {MEDIUM_RISK_THRESHOLD}.",
-            f"Estimated monthly revenue at risk from high-risk customers: ${revenue_at_risk:,.0f}.",
-            f"Customers paying via {highest_pay_method} have the highest churn rate at {highest_pay_rate:.1f}% — this payment segment requires immediate attention.",
+            (f"{high_risk_count:,} customers ({high_risk_count/len(df)*100:.1f}% of the dataset) "
+             f"are classified as High Risk by the ML model (predicted churn probability "
+             f"> {MEDIUM_RISK_THRESHOLD:.0%})."),
+            (f"The combined monthly charges for all model-predicted High-Risk customers total "
+             f"${revenue_at_risk:,.0f}/month — this is the revenue potentially at risk if these "
+             f"customers were to churn (based on model predictions, not confirmed outcomes)."),
+            (f"Customers paying via '{highest_pay_method}' have the highest observed churn rate "
+             f"at {highest_pay_rate:.1f}%, compared to {lowest_pay_rate:.1f}% for "
+             f"'{lowest_pay_method}' users."),
         ],
         "opportunities": [
-            f"{loyal_count:,} long-tenure loyal customers (tenure > 24 months, currently retained) can be targeted for upselling.",
-            "Customers without tech support or online security show significantly higher churn — these add-on services represent a retention lever.",
-            "Month-to-month customers who upgrade to annual or two-year contracts show substantially lower churn — targeted contract upgrade campaigns can improve retention.",
+            (f"{loyal_count:,} customers have tenure > 24 months and have not churned — "
+             f"this segment ({loyal_count/len(df)*100:.1f}% of all customers) represents a "
+             f"stable base for retention and upsell campaigns."),
+            (f"Customers without TechSupport churn at {ts_no_rate:.1f}% vs {ts_yes_rate:.1f}% "
+             f"with TechSupport. Customers without OnlineSecurity churn at {sec_no_rate:.1f}% "
+             f"vs {sec_yes_rate:.1f}% with it. Adding these services is associated with lower "
+             f"churn in the observed data (correlation, not confirmed causation)."),
+            (f"Observed churn rate for {highest_churn_contract} contracts is "
+             f"{highest_churn_contract_rate:.1f}% vs {lowest_churn_contract_rate:.1f}% for "
+             f"{lowest_churn_contract} contracts. Customers successfully migrated to longer "
+             f"contracts are associated with lower churn in this dataset."),
         ],
         "actions": [
-            f"Launch a proactive 90-day retention program for all {high_risk_count:,} high-risk customers — prioritize those on month-to-month contracts.",
-            "Offer discounted tech support and online security bundles to customers who currently have neither — this addresses a key churn driver.",
-            f"Introduce contract upgrade incentives specifically for {highest_churn_contract} contract customers — even a 3-month discount for switching to annual contracts can reduce churn significantly.",
-            "Investigate why customers using electronic check have higher churn — consider offering payment method switch incentives or improving billing experience.",
+            (f"Prioritise outreach to the {high_risk_count:,} customers the model classifies as "
+             f"High Risk (probability > {MEDIUM_RISK_THRESHOLD:.0%}), starting with those on "
+             f"{highest_churn_contract} contracts ({highest_churn_contract_rate:.1f}% observed "
+             f"churn rate)."),
+            (f"Offer TechSupport and OnlineSecurity to customers who have neither: observed churn "
+             f"is {ts_no_rate:.1f}% (no TechSupport) vs {ts_yes_rate:.1f}% (with TechSupport) "
+             f"and {sec_no_rate:.1f}% (no OnlineSecurity) vs {sec_yes_rate:.1f}% (with it)."),
+            (f"Design contract upgrade incentives for {highest_churn_contract} customers: the "
+             f"observed churn gap between {highest_churn_contract} ({highest_churn_contract_rate:.1f}%) "
+             f"and {lowest_churn_contract} ({lowest_churn_contract_rate:.1f}%) contracts is "
+             f"{highest_churn_contract_rate - lowest_churn_contract_rate:.1f} percentage points."),
+            (f"Investigate '{highest_pay_method}' payment dissatisfaction: this group has an "
+             f"observed churn rate of {highest_pay_rate:.1f}% — {highest_pay_rate - lowest_pay_rate:.1f} "
+             f"percentage points above the lowest-churn payment method ('{lowest_pay_method}' "
+             f"at {lowest_pay_rate:.1f}%)."),
         ],
     }
     return insights
@@ -447,9 +525,28 @@ def section_header(title: str):
 
 # ---- PAGE 1: Executive Overview ----
 
-def page_overview(df, kpis, pred_df, insights):
+def page_overview(df, kpis, pred_df, insights, cleaning_log):
     st.title("📡 Telecom Customer Churn Intelligence")
     st.markdown("**IBM SkillsBuild Data Analytics with AI Academic Internship**  |  *Executive Overview*")
+    st.markdown("---")
+
+    # --- Data Provenance (academic transparency) ---
+    with st.expander("📋 Data Provenance — How the analytical dataset was constructed", expanded=False):
+        st.markdown(
+            f"""
+| Step | Description | Rows before | Rows removed | Rows after |
+|------|-------------|------------:|-------------:|-----------:|
+| Raw CSV loaded | Source: `WA_Fn-UseC_-Telco-Customer-Churn.csv` | {cleaning_log['raw_rows']:,} | — | {cleaning_log['raw_rows']:,} |
+| Drop blank TotalCharges | Customers with `tenure=0` have a blank TotalCharges field in the CSV. `pd.to_numeric(errors='coerce')` converts blank to `NaN`; those rows are then dropped. These are new accounts that have never been billed and carry no churn signal. | {cleaning_log['raw_rows']:,} | {cleaning_log['dropped_blank_totalcharges']:,} | {cleaning_log['after_totalcharges_drop']:,} |
+| Drop exact duplicates | Rows where every column value is identical are removed. | {cleaning_log['after_totalcharges_drop']:,} | {cleaning_log['dropped_duplicates']:,} | {cleaning_log['final_rows']:,} |
+| **Analytical dataset** | Used for all EDA, KPI calculations, and model training | | | **{cleaning_log['final_rows']:,}** |
+            """,
+            unsafe_allow_html=False,
+        )
+        st.caption(
+            "All churn rates and KPIs in this dashboard are calculated from the "
+            f"{cleaning_log['final_rows']:,}-row cleaned dataset, not the raw {cleaning_log['raw_rows']:,}-row CSV."
+        )
     st.markdown("---")
 
     # KPI Row
@@ -534,6 +631,11 @@ def page_overview(df, kpis, pred_df, insights):
     # Executive Insights
     st.markdown("---")
     section_header("🔍 Executive Insights")
+    st.caption(
+        "All percentages and counts below are computed at runtime from the cleaned dataset. "
+        "Figures labelled 'model-predicted' or 'ML model' are outputs of the trained classifier — "
+        "they indicate association, not confirmed causal relationships."
+    )
     tab1, tab2, tab3, tab4 = st.tabs(["Key Findings", "Risks", "Opportunities", "Recommended Actions"])
 
     with tab1:
@@ -722,7 +824,14 @@ def page_risk_action(df, pred_df, fi_df, kpis, insights):
     with r1: kpi_card("High-Risk Customers",  f"{len(high_risk):,}", "red")
     with r2: kpi_card("Medium-Risk Customers",f"{len(med_risk):,}",  "orange")
     with r3: kpi_card("Low-Risk Customers",   f"{len(low_risk):,}",  "green")
-    with r4: kpi_card("Revenue at Risk ($/mo)",f"${revenue_at_risk:,.0f}", "red")
+    with r4: kpi_card("Model-Predicted Revenue at Risk ($/mo)", f"${revenue_at_risk:,.0f}", "red")
+    st.caption(
+        f"Risk categories are assigned by the ML model: High Risk = predicted churn probability "
+        f"> {MEDIUM_RISK_THRESHOLD:.0%}, Medium Risk = {LOW_RISK_THRESHOLD:.0%}–{MEDIUM_RISK_THRESHOLD:.0%}, "
+        f"Low Risk = < {LOW_RISK_THRESHOLD:.0%}. "
+        "'Revenue at Risk' is the sum of MonthlyCharges for all model-predicted High-Risk customers — "
+        "it represents potential exposure, not confirmed lost revenue."
+    )
 
     col_r1, col_r2 = st.columns(2)
 
@@ -747,6 +856,13 @@ def page_risk_action(df, pred_df, fi_df, kpis, insights):
         )
         fig_r2.update_layout(margin=dict(t=10, b=10), coloraxis_showscale=False)
         st.plotly_chart(fig_r2, use_container_width=True)
+        st.caption(
+            "Importance scores are aggregated across one-hot-encoded sub-features "
+            "back to the original column name. For Random Forest: Mean Decrease in "
+            "Impurity (MDI). For Logistic Regression: absolute value of the "
+            "standardised coefficient. These measure predictive association — "
+            "they do not establish causation."
+        )
 
     # Risk insights
     for risk_text in insights["risks"]:
@@ -878,15 +994,52 @@ def page_prediction(pipeline, fi_df):
         if proba < LOW_RISK_THRESHOLD:
             risk_label = "🟢 Low Risk"
             risk_color = "#27ae60"
-            action = "This customer shows low churn risk. Continue providing quality service and consider loyalty rewards."
+            action = (
+                f"This customer's predicted churn probability is {proba:.1%}, which is below the "
+                f"{LOW_RISK_THRESHOLD:.0%} Low Risk threshold. No immediate intervention required. "
+                "Continue standard service quality."
+            )
         elif proba < MEDIUM_RISK_THRESHOLD:
             risk_label = "🟡 Medium Risk"
             risk_color = "#f39c12"
-            action = "Monitor this customer closely. Consider a proactive outreach call and offer a service upgrade."
+            # Build a context-aware note based on the customer's own inputs
+            _risk_factors = []
+            if contract == "Month-to-month":
+                _risk_factors.append("month-to-month contract (highest observed churn contract type)")
+            if internet == "Fiber optic":
+                _risk_factors.append("Fiber optic service (highest observed churn internet type)")
+            if tech_support == "No":
+                _risk_factors.append("no TechSupport (associated with higher churn in training data)")
+            if online_security == "No":
+                _risk_factors.append("no OnlineSecurity (associated with higher churn in training data)")
+            _factors_str = "; ".join(_risk_factors) if _risk_factors else "review the top feature drivers below"
+            action = (
+                f"Predicted churn probability {proba:.1%} — in the Medium Risk band "
+                f"({LOW_RISK_THRESHOLD:.0%}–{MEDIUM_RISK_THRESHOLD:.0%}). "
+                f"Flagged risk factors for this customer: {_factors_str}. "
+                "Consider a proactive outreach call and targeted service offer."
+            )
         else:
             risk_label = "🔴 High Risk"
             risk_color = "#e74c3c"
-            action = "Immediate retention action required. Offer a personalised retention package, contract upgrade incentive, or discounted bundle."
+            _risk_factors = []
+            if contract == "Month-to-month":
+                _risk_factors.append("month-to-month contract")
+            if internet == "Fiber optic":
+                _risk_factors.append("Fiber optic internet")
+            if tech_support == "No":
+                _risk_factors.append("no TechSupport")
+            if online_security == "No":
+                _risk_factors.append("no OnlineSecurity")
+            if senior == 1:
+                _risk_factors.append("Senior Citizen")
+            _factors_str = "; ".join(_risk_factors) if _risk_factors else "review the top feature drivers below"
+            action = (
+                f"Predicted churn probability {proba:.1%} — above the {MEDIUM_RISK_THRESHOLD:.0%} "
+                f"High Risk threshold. Customer-specific risk factors present: {_factors_str}. "
+                "Immediate retention outreach recommended: consider a contract upgrade incentive "
+                "and/or bundling TechSupport and OnlineSecurity."
+            )
 
         st.markdown("---")
         st.markdown("### Prediction Results")
@@ -1068,7 +1221,7 @@ def main():
         st.error(str(e))
         st.stop()
 
-    df = clean_data(raw_df)
+    df, cleaning_log = clean_data(raw_df)
 
     # ---- Train or load model ----
     pipeline = load_pipeline(MODEL_PATH)
@@ -1105,7 +1258,7 @@ def main():
     insights = generate_business_insights(df, kpis, fi_df, pred_df)
 
     # ---- Render selected page ----
-    if   page_key == "overview"   : page_overview(df, kpis, pred_df, insights)
+    if   page_key == "overview"   : page_overview(df, kpis, pred_df, insights, cleaning_log)
     elif page_key == "analysis"   : page_churn_analysis(df, pred_df)
     elif page_key == "risk"       : page_risk_action(df, pred_df, fi_df, kpis, insights)
     elif page_key == "prediction" : page_prediction(pipeline, fi_df)
