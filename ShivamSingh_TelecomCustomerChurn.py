@@ -435,22 +435,34 @@ def generate_business_insights(df: pd.DataFrame, kpis: dict, fi_df: pd.DataFrame
              f"{lowest_churn_contract} contracts. Customers successfully migrated to longer "
              f"contracts are associated with lower churn in this dataset."),
         ],
+        # Pre-compute differences before rounding so printed values are
+        # consistent — avoids e.g. "42.7% − 2.9% = 39.8%" when the true
+        # difference rounds to 39.7%.
         "actions": [
-            (f"Prioritise outreach to the {high_risk_count:,} customers the model classifies as "
-             f"High Risk (probability > {MEDIUM_RISK_THRESHOLD:.0%}), starting with those on "
-             f"{highest_churn_contract} contracts ({highest_churn_contract_rate:.1f}% observed "
-             f"churn rate)."),
-            (f"Offer TechSupport and OnlineSecurity to customers who have neither: observed churn "
-             f"is {ts_no_rate:.1f}% (no TechSupport) vs {ts_yes_rate:.1f}% (with TechSupport) "
-             f"and {sec_no_rate:.1f}% (no OnlineSecurity) vs {sec_yes_rate:.1f}% (with it)."),
-            (f"Design contract upgrade incentives for {highest_churn_contract} customers: the "
-             f"observed churn gap between {highest_churn_contract} ({highest_churn_contract_rate:.1f}%) "
-             f"and {lowest_churn_contract} ({lowest_churn_contract_rate:.1f}%) contracts is "
-             f"{highest_churn_contract_rate - lowest_churn_contract_rate:.1f} percentage points."),
-            (f"Investigate '{highest_pay_method}' payment dissatisfaction: this group has an "
-             f"observed churn rate of {highest_pay_rate:.1f}% — {highest_pay_rate - lowest_pay_rate:.1f} "
-             f"percentage points above the lowest-churn payment method ('{lowest_pay_method}' "
-             f"at {lowest_pay_rate:.1f}%)."),
+            (f"Use the model's High-Risk flag (probability > {MEDIUM_RISK_THRESHOLD:.0%}) as a "
+             f"prioritisation tool to identify the {high_risk_count:,} customers most worth "
+             f"investigating for retention outreach — beginning with those on "
+             f"{highest_churn_contract} contracts, which show the highest observed churn rate "
+             f"({highest_churn_contract_rate:.1f}%) in this dataset. Validate through a "
+             f"controlled experiment before rolling out at scale."),
+            (f"Evaluate targeted TechSupport and OnlineSecurity offers for customers who currently "
+             f"lack these services, and measure the retention impact through a controlled "
+             f"experiment. The observed churn rates in this dataset are "
+             f"{ts_no_rate:.1f}% (no TechSupport) vs {ts_yes_rate:.1f}% (with TechSupport) and "
+             f"{sec_no_rate:.1f}% (no OnlineSecurity) vs {sec_yes_rate:.1f}% (with it) — "
+             f"these are associations, not proven causal effects."),
+            (f"Test contract-upgrade incentives among {highest_churn_contract} customers and "
+             f"measure whether the intervention reduces churn. The observed churn gap between "
+             f"{highest_churn_contract} ({highest_churn_contract_rate:.1f}%) and "
+             f"{lowest_churn_contract} ({lowest_churn_contract_rate:.1f}%) contracts is "
+             f"{round(highest_churn_contract_rate - lowest_churn_contract_rate, 1):.1f} "
+             f"percentage points in this dataset."),
+            (f"Investigate whether the higher churn rate among '{highest_pay_method}' users "
+             f"({highest_pay_rate:.1f}%) reflects a billing experience problem or a customer "
+             f"segment effect. The gap vs '{lowest_pay_method}' users ({lowest_pay_rate:.1f}%) "
+             f"is {round(highest_pay_rate - lowest_pay_rate, 1):.1f} percentage points. "
+             f"Design a targeted experiment before concluding a payment-method intervention "
+             f"would reduce churn."),
         ],
     }
     return insights
@@ -1134,8 +1146,12 @@ def page_model_performance(results, X_test, y_test, best_name):
     st.success(
         f"✅ **Best Model: {best_name}** selected based on highest ROC-AUC "
         f"({best_metrics['ROC-AUC']:.4f}). "
-        "ROC-AUC is prioritised over accuracy for churn prediction because the business "
-        "cost of missing a churner (False Negative) is higher than a false alarm (False Positive)."
+        "ROC-AUC was used as the primary selection metric because it evaluates the model's "
+        "ability to rank customers by churn risk across all probability thresholds — making it "
+        "more informative than accuracy alone when the classes are imbalanced (~26% churn). "
+        "Note: the relative cost of False Negatives vs False Positives in this business context "
+        "is assumed, not measured — a production deployment should calibrate the decision "
+        "threshold against actual retention programme costs."
     )
 
     col1, col2 = st.columns(2)
