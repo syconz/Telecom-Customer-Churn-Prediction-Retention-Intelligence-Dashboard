@@ -1,0 +1,29 @@
+# Dataset (download from Kaggle separately)
+WA_Fn-UseC_-Telco-Customer-Churn.csv
+
+# Auto-generated model file (created on first run)
+churn_model_pipeline.joblib
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+
+# Virtual environments
+venv/
+env/
+.env/
+.venv/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Streamlit cache
+.streamlit/
