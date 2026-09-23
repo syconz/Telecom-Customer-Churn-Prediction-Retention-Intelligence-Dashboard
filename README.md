@@ -153,8 +153,9 @@ Business Decisions & Recommended Retention Actions
 
 ### Model Selection Strategy
 The **best model is selected by ROC-AUC**, not accuracy.
-- Churn prediction is a **business-risk problem** — a missed churner (False Negative) costs more than a false alarm (False Positive).
-- ROC-AUC measures discrimination ability across all thresholds, making it the appropriate primary metric.
+- ROC-AUC evaluates a model's ability to **rank customers by churn risk across all probability thresholds**, making it more informative than accuracy when classes are imbalanced (~26% churn in this dataset).
+- Accuracy alone can be misleading here — a model that predicts "no churn" for every customer would score ~74% accuracy while being useless.
+- Note: the relative cost of a missed churner (False Negative) vs a false alarm (False Positive) is **assumed**, not measured from this dataset. A production deployment should calibrate the decision threshold against actual retention programme costs before use.
 
 ---
 
@@ -315,7 +316,7 @@ Telecom-Customer-Churn-Prediction-Retention-Intelligence-Dashboard/
 | 2 | Which contract type has the highest churn? | Contract analysis — all pages |
 | 3 | Do newer customers churn more? | Tenure analysis — Page 2 |
 | 4 | Does internet service type affect churn? | Internet service chart — Page 2 |
-| 5 | How much monthly revenue is at risk? | Revenue at Risk KPI — Page 3 |
+| 5 | How much monthly revenue is potentially at risk? | Model-Predicted Revenue at Risk KPI — Page 3 (sum of MonthlyCharges for model-predicted High-Risk customers) |
 | 6 | Which features are the strongest churn predictors? | Feature importance chart — Page 3 |
 | 7 | Which specific customers should we contact first? | High-risk customer table — Page 3 |
 | 8 | What retention actions should we take? | Recommended Actions — Page 3 |
@@ -325,8 +326,11 @@ Telecom-Customer-Churn-Prediction-Retention-Intelligence-Dashboard/
 ## ⚠️ Disclaimer
 
 - All analysis results are computed directly from the dataset at runtime — **no values are hard-coded**.
-- Feature importance indicates **association/correlation**, not causation.
-- Model predictions are probabilistic — real retention decisions should be validated with A/B testing.
+- The analytical dataset contains fewer rows than the raw CSV. The `clean_data()` function removes rows with blank `TotalCharges` (new customers with `tenure=0` who have never been billed) and any exact duplicate rows. The dashboard's **Data Provenance** expander (Page 1) shows the exact row counts for every removal step.
+- Feature importance scores (Random Forest: Mean Decrease in Impurity; Logistic Regression: |coefficient|) indicate **predictive association**, not causal relationships. A feature ranking highly does not prove it causes churn.
+- "Revenue at Risk" figures are based on **model-predicted** High-Risk customers, not confirmed churners. They represent potential exposure, not actual lost revenue.
+- Recommended actions are framed as **testable hypotheses** (analytics → experiment → decision), not proven interventions. Business decisions based on this analysis should be validated through controlled experiments.
+- Model predictions are probabilistic. The 50% decision threshold is a default and should be tuned against actual retention costs before production use.
 - This project is intended for educational purposes as part of the IBM SkillsBuild Academic Internship.
 
 ---
