@@ -25,5 +25,6 @@ env/
 # macOS
 .DS_Store
 
-# Streamlit cache
-.streamlit/
+# Streamlit local settings and secrets (keep the shared UI theme)
+.streamlit/*
+!.streamlit/config.toml

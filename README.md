@@ -122,7 +122,7 @@ Machine Learning Pipeline
     ▼
 Predictions & Risk Labelling
   • ChurnProbability for every customer
-  • Risk: Low (<30%) | Medium (30–60%) | High (>60%)
+  • Risk: Low (≤30%) | Medium (>30–60%) | High (>60%)
     │
     ▼
 Feature Importance (Top Churn Drivers)
@@ -173,40 +173,50 @@ The **best model is selected by ROC-AUC**, not accuracy.
 
 ## 🖥 Dashboard Features
 
-### Page 1 — 🏠 Executive Overview
-- KPI cards: Total Customers, Churn Rate, Retention Rate, Monthly Revenue, High-Risk count, Avg Monthly Charges
+The **Retention IQ** workspace uses a shared slate-and-teal theme, responsive layouts,
+consistent chart cards, keyboard-accessible controls, and a sidebar with model status.
+
+### Page 1 — Overview
+- KPI cards: Customers Analysed, Observed Churn Rate, Monthly Charges Base, High-Risk Customers
+- Supporting labels show retained share and average monthly charges; dataset details include average tenure
+- A retention-priority banner links directly to the high-risk workspace
 - Churn distribution pie chart
 - Churn by contract type
 - Churn risk distribution bar chart
 - Monthly charges vs churn box plot
 - **Executive Insights tabs:** Key Findings | Risks | Opportunities | Recommended Actions
 
-### Page 2 — 📊 Churn & Customer Analysis
-- **6 sidebar filters:** Contract, Internet Service, Payment Method, Senior Citizen, Gender, Risk Level
+### Page 2 — Customer analysis
+- **6 in-page filters:** Contract, Internet Service, Payment Method, Senior Citizen, Gender, Risk Level
+- Reset filters, segment-level KPI cards, and an empty-results state
+- Charts grouped into Account & Billing, Services, and Demographics tabs
 - Churn by tenure (grouped), payment method, internet service, online security
 - Monthly charges distribution by churn status
 - Tech support & churn, gender & senior citizen churn
 
-### Page 3 — 🎯 Risk, Opportunity & Action
+### Page 3 — Retention priorities
 - Risk KPI cards: High / Medium / Low risk counts + Revenue at Risk
 - Risk distribution by contract type (stacked bar)
 - Top-10 churn drivers (feature importance)
 - Opportunity charts: paperless billing, tenure groups
 - Data-driven recommended actions (auto-generated from dataset)
 - **High-risk customer snapshot table** (top 20 by churn probability)
+- Download all high-risk records as CSV, including source CSV row numbers
 
-### Page 4 — 🔮 Customer Prediction
-- 20-field individual customer input form
+### Page 4 — Customer prediction
+- 19-field form organised into Account & Billing, Services, and Customer Details tabs
+- Risk-band guide alongside the form
 - **Churn probability gauge chart**
 - Risk category (Low / Medium / High) with colour coding
-- Key factors influencing the prediction
+- Model-wide predictive feature importance, clearly distinguished from an individual explanation
 - Personalised recommended retention action
 
-### Page 5 — 🤖 Model Performance
+### Page 5 — Model performance
+- Summary cards for the selected model's ROC-AUC, recall, precision, and F1
 - Side-by-side model comparison table (highlighted best scores)
 - Dual ROC curves with AUC labels
 - Confusion matrix for best model
-- Full sklearn classification report
+- Expandable sklearn classification report and evaluation guidance
 
 ---
 
@@ -277,7 +287,7 @@ Or open directly in **VS Code** with the Jupyter extension (`Ctrl+Shift+P` → *
 ### Streamlit Dashboard
 - Professional 5-page dashboard at `http://localhost:8501`
 - All charts are interactive (hover, zoom, filter)
-- Sidebar filters update all charts in real time
+- In-page filters update customer-analysis charts and segment KPIs in real time
 - Individual customer churn prediction with probability gauge
 
 ### Jupyter Notebook
@@ -298,6 +308,9 @@ Or open directly in **VS Code** with the Jupyter extension (`Ctrl+Shift+P` → *
 ```
 Telecom-Customer-Churn-Prediction-Retention-Intelligence-Dashboard/
 ├── ShivamSingh_TelecomCustomerChurn.py         ← Main Streamlit application
+├── dashboard_ui.py                            ← Shared presentation components and Plotly styling
+├── assets/dashboard.css                       ← Responsive dashboard styles
+├── .streamlit/config.toml                     ← Shared Streamlit theme
 ├── ShivamSingh_TelecomCustomerChurn.ipynb      ← Jupyter analysis notebook
 ├── ShivamSingh_TelecomCustomerChurnReport.docx ← Formal project report (18 sections)
 ├── requirements.txt                            ← Python dependencies

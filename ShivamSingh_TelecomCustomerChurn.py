@@ -25,6 +25,12 @@ from plotly.subplots import make_subplots
 
 import streamlit as st
 
+from dashboard_ui import (
+    COLORS, CHURN_COLORS, RISK_COLORS, RISK_ORDER, setup_page, page_header,
+    kpi_card, section_header, insight_card, chart, navigate_to,
+    sidebar_brand, sidebar_status,
+)
+
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.linear_model import LogisticRegression
@@ -471,361 +477,219 @@ def generate_business_insights(df: pd.DataFrame, kpis: dict, fi_df: pd.DataFrame
 # STREAMLIT DASHBOARD
 # ---------------------------------------------------------------------------
 
-def setup_page():
-    st.set_page_config(
-        page_title="Telecom Churn Intelligence",
-        page_icon="📡",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
-    # Custom CSS for professional look
-    st.markdown("""
-    <style>
-    /* Main background */
-    .main { background-color: #f8f9fb; }
-    /* Metric cards */
-    .metric-card {
-        background: white;
-        border-radius: 10px;
-        padding: 18px 20px;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.08);
-        border-left: 4px solid #3b6fd4;
-        margin-bottom: 12px;
-    }
-    .metric-card.red  { border-left-color: #e74c3c; }
-    .metric-card.green{ border-left-color: #27ae60; }
-    .metric-card.orange{border-left-color: #f39c12; }
-    .metric-value { font-size: 28px; font-weight: 700; color: #1a1a2e; }
-    .metric-label { font-size: 13px; color: #6c757d; margin-top: 2px; }
-    /* Section headers */
-    .section-header {
-        font-size: 20px; font-weight: 700;
-        color: #1a1a2e; border-bottom: 2px solid #3b6fd4;
-        padding-bottom: 6px; margin: 24px 0 16px 0;
-    }
-    /* Insight boxes */
-    .insight-box {
-        background: #eef2ff; border-radius: 8px;
-        padding: 14px 18px; margin: 8px 0;
-        border-left: 4px solid #3b6fd4;
-        font-size: 14px; color: #1a1a2e;
-    }
-    .risk-box    { background: #fff0f0; border-left-color: #e74c3c; }
-    .oppty-box   { background: #f0fff4; border-left-color: #27ae60; }
-    .action-box  { background: #fffbf0; border-left-color: #f39c12; }
-    /* Hide streamlit branding */
-    #MainMenu { visibility: hidden; }
-    footer     { visibility: hidden; }
-    </style>
-    """, unsafe_allow_html=True)
-
-
-def kpi_card(label: str, value, color: str = "blue", suffix: str = ""):
-    color_map = {"blue": "", "red": "red", "green": "green", "orange": "orange"}
-    cls = color_map.get(color, "")
-    st.markdown(f"""
-    <div class="metric-card {cls}">
-        <div class="metric-value">{value}{suffix}</div>
-        <div class="metric-label">{label}</div>
-    </div>
-    """, unsafe_allow_html=True)
-
-
-def section_header(title: str):
-    st.markdown(f'<div class="section-header">{title}</div>', unsafe_allow_html=True)
+def churn_rate_chart(df, column, title, horizontal=False):
+    """A consistent chart card for observed churn across customer segments."""
+    with st.container(border=True, key=f"panel-rate-{column}"):
+        section_header(title, "Observed churn · share of customers in each segment")
+        data = churn_rate_by(df, column).dropna(subset=["ChurnRate"])
+        data["Segment"] = data[column].astype(str)
+        if horizontal:
+            data = data.sort_values("ChurnRate")
+        fig = px.bar(
+            data,
+            x="ChurnRate" if horizontal else "Segment",
+            y="Segment" if horizontal else "ChurnRate",
+            orientation="h" if horizontal else "v",
+            text="ChurnRate", custom_data=["Total"],
+            labels={"Segment": "", "ChurnRate": "Churn rate (%)"},
+        )
+        fig.update_traces(
+            marker_color=[COLORS["red"] if rate == data["ChurnRate"].max() else COLORS["teal"]
+                          for rate in data["ChurnRate"]],
+            marker_line_width=0, texttemplate="%{text:.1f}%", textposition="outside",
+            cliponaxis=False,
+            hovertemplate=("%{y}<br>Churn rate: %{x:.1f}%" if horizontal else
+                           "%{x}<br>Churn rate: %{y:.1f}%")
+                          + "<br>Customers: %{customdata[0]:,}<extra></extra>",
+        )
+        maximum = max(10, data["ChurnRate"].max() * 1.2) if not data.empty else 100
+        if horizontal:
+            fig.update_xaxes(range=[0, maximum])
+        else:
+            fig.update_yaxes(range=[0, maximum])
+        fig.update_layout(showlegend=False, bargap=0.45)
+        chart(fig, key=f"churn-rate-{column}")
 
 
 # ---- PAGE 1: Executive Overview ----
 
 def page_overview(df, kpis, pred_df, insights, cleaning_log):
-    st.title("📡 Telecom Customer Churn Intelligence")
-    st.markdown("**IBM SkillsBuild Data Analytics with AI Academic Internship**  |  *Executive Overview*")
-    st.markdown("---")
+    page_header("Workspace / Overview", "Your retention overview",
+                "Understand customer churn, spot emerging risk, and focus your next retention move.")
+    high_risk = pred_df[pred_df["RiskCategory"] == "High Risk"]
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        kpi_card("Customers analysed", f"{len(df):,}", "blue", note="Cleaned customer records")
+    with c2:
+        kpi_card("Observed churn rate", f"{kpis['Churn Rate (%)']:.1f}", "red", "%",
+                 note=f"{kpis['Churned Customers']:,} churned · {kpis['Retention Rate (%)']:.1f}% retained")
+    with c3:
+        kpi_card("Monthly charges base", f"${kpis['Total Monthly Revenue']/1000:,.1f}k", "teal",
+                 note=f"${kpis['Avg Monthly Charges']:.2f} average per customer")
+    with c4:
+        kpi_card("High-risk customers", f"{len(high_risk):,}", "red",
+                 note=f"{len(high_risk)/len(df):.1%} of portfolio · model-predicted")
 
-    # --- Data Provenance (academic transparency) ---
-    with st.expander("📋 Data Provenance — How the analytical dataset was constructed", expanded=False):
-        st.markdown(
-            f"""
-| Step | Description | Rows before | Rows removed | Rows after |
-|------|-------------|------------:|-------------:|-----------:|
-| Raw CSV loaded | Source: `WA_Fn-UseC_-Telco-Customer-Churn.csv` | {cleaning_log['raw_rows']:,} | — | {cleaning_log['raw_rows']:,} |
-| Drop blank TotalCharges | Customers with `tenure=0` have a blank TotalCharges field in the CSV. `pd.to_numeric(errors='coerce')` converts blank to `NaN`; those rows are then dropped. These are new accounts that have never been billed and carry no churn signal. | {cleaning_log['raw_rows']:,} | {cleaning_log['dropped_blank_totalcharges']:,} | {cleaning_log['after_totalcharges_drop']:,} |
-| Drop exact duplicates | Rows where every column value is identical are removed. | {cleaning_log['after_totalcharges_drop']:,} | {cleaning_log['dropped_duplicates']:,} | {cleaning_log['final_rows']:,} |
-| **Analytical dataset** | Used for all EDA, KPI calculations, and model training | | | **{cleaning_log['final_rows']:,}** |
-            """,
-            unsafe_allow_html=False,
-        )
-        st.caption(
-            "All churn rates and KPIs in this dashboard are calculated from the "
-            f"{cleaning_log['final_rows']:,}-row cleaned dataset, not the raw {cleaning_log['raw_rows']:,}-row CSV."
-        )
-    st.markdown("---")
+    with st.container(key="retention-banner"):
+        message, action = st.columns([3, 1], vertical_alignment="center")
+        with message:
+            st.markdown(
+                '<div class="banner-eyebrow">YOUR NEXT RETENTION MOVE</div>'
+                f'<div class="banner-title">{len(high_risk):,} customers worth a closer look.</div>'
+                f'<p class="banner-note">${high_risk["MonthlyCharges"].sum():,.0f} in monthly charges '
+                'across the high-risk segment. Explore the signals and prioritise outreach.</p>',
+                unsafe_allow_html=True,
+            )
+        with action:
+            st.button("Explore retention priorities →", width="stretch",
+                      on_click=navigate_to, args=("Retention priorities",))
 
-    # KPI Row
-    section_header("Key Performance Indicators")
-    c1, c2, c3, c4, c5, c6 = st.columns(6)
-    with c1: kpi_card("Total Customers",       f"{kpis['Total Customers']:,}", "blue")
-    with c2: kpi_card("Churned Customers",      f"{kpis['Churned Customers']:,}", "red")
-    with c3: kpi_card("Churn Rate",             f"{kpis['Churn Rate (%)']}", "red", "%")
-    with c4: kpi_card("Retention Rate",         f"{kpis['Retention Rate (%)']}", "green", "%")
-    with c5: kpi_card("Monthly Revenue",        f"${kpis['Total Monthly Revenue']:,.0f}", "blue")
-    with c6:
-        high_risk_count = len(pred_df[pred_df["RiskCategory"] == "High Risk"])
-        kpi_card("High-Risk Customers", f"{high_risk_count:,}", "orange")
-
-    c7, c8 = st.columns(2)
-    with c7: kpi_card("Avg Monthly Charges", f"${kpis['Avg Monthly Charges']}", "blue")
-    with c8: kpi_card("Avg Tenure (months)", f"{kpis['Avg Tenure (months)']}", "blue")
-
-    st.markdown("---")
-
-    # Charts Row 1
     col_a, col_b = st.columns(2)
-
-    with col_a:
-        section_header("Churn Distribution")
-        churn_counts = df[TARGET_COL].value_counts().reset_index()
-        churn_counts.columns = ["Churn", "Count"]
-        churn_counts["Label"] = churn_counts["Churn"].map({1: "Churned", 0: "Retained"})
-        fig = px.pie(
-            churn_counts, values="Count", names="Label",
-            color="Label",
-            color_discrete_map={"Churned": "#e74c3c", "Retained": "#27ae60"},
-            hole=0.45,
-        )
-        fig.update_layout(margin=dict(t=10, b=10), legend=dict(orientation="h"))
-        st.plotly_chart(fig, use_container_width=True)
-
+    with col_a, st.container(border=True, key="panel-retention"):
+        section_header("Customer retention", "Observed outcomes across the analytical dataset")
+        counts = df[TARGET_COL].map({0: "Retained", 1: "Churned"}).value_counts().rename_axis("Status").reset_index(name="Customers")
+        fig = px.pie(counts, values="Customers", names="Status", color="Status",
+                     color_discrete_map=CHURN_COLORS, hole=0.76)
+        fig.update_traces(textinfo="none", marker_line_color="white", marker_line_width=4,
+                          hovertemplate="%{label}<br>%{value:,} customers · %{percent}<extra></extra>")
+        fig.add_annotation(x=0.5, y=0.5, showarrow=False,
+                           text=f"<b>{kpis['Retention Rate (%)']:.1f}%</b><br><span style='font-size:12px'>retained</span>",
+                           font=dict(size=30, color=COLORS["ink"]))
+        chart(fig)
     with col_b:
-        section_header("Churn by Contract Type")
-        contract_data = churn_rate_by(df, "Contract")
-        fig2 = px.bar(
-            contract_data, x="Contract", y="ChurnRate",
-            color="ChurnRate",
-            color_continuous_scale="RdYlGn_r",
-            text="ChurnRate",
-            labels={"ChurnRate": "Churn Rate (%)"},
-        )
-        fig2.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-        fig2.update_layout(margin=dict(t=10, b=10), coloraxis_showscale=False)
-        st.plotly_chart(fig2, use_container_width=True)
+        churn_rate_chart(df, "Contract", "Churn by contract type")
 
-    # Charts Row 2
     col_c, col_d = st.columns(2)
+    with col_c, st.container(border=True, key="panel-risk-landscape"):
+        section_header("The risk landscape", f"Model-predicted segments · {LOW_RISK_THRESHOLD:.0%} and {MEDIUM_RISK_THRESHOLD:.0%} probability cutoffs")
+        counts = pred_df["RiskCategory"].value_counts().rename_axis("Risk").reset_index(name="Customers")
+        fig = px.bar(counts, x="Risk", y="Customers", color="Risk", text="Customers",
+                     color_discrete_map=RISK_COLORS, category_orders={"Risk": RISK_ORDER},
+                     labels={"Risk": ""})
+        fig.update_traces(texttemplate="%{text:,}", textposition="outside", cliponaxis=False)
+        fig.update_layout(showlegend=False, bargap=0.5)
+        fig.update_yaxes(range=[0, counts["Customers"].max() * 1.2])
+        chart(fig)
+    with col_d, st.container(border=True, key="panel-monthly-charges"):
+        section_header("Monthly charges & churn", "Billing distribution · sample of up to 1,000 customers")
+        sample = df.sample(min(1000, len(df)), random_state=42).copy()
+        sample["Status"] = sample[TARGET_COL].map({0: "Retained", 1: "Churned"})
+        fig = px.box(sample, x="Status", y="MonthlyCharges", color="Status",
+                     color_discrete_map=CHURN_COLORS, labels={"Status": "", "MonthlyCharges": "Monthly charges ($)"})
+        fig.update_layout(showlegend=False)
+        chart(fig)
 
-    with col_c:
-        section_header("Churn Risk Distribution")
-        risk_counts = pred_df["RiskCategory"].value_counts().reset_index()
-        risk_counts.columns = ["Risk", "Count"]
-        color_map_risk = {"Low Risk": "#27ae60", "Medium Risk": "#f39c12", "High Risk": "#e74c3c"}
-        fig3 = px.bar(
-            risk_counts, x="Risk", y="Count",
-            color="Risk",
-            color_discrete_map=color_map_risk,
-            text="Count",
-        )
-        fig3.update_traces(textposition="outside")
-        fig3.update_layout(margin=dict(t=10, b=10), showlegend=False)
-        st.plotly_chart(fig3, use_container_width=True)
+    with st.container(border=True, key="panel-insights"):
+        section_header("From insight to action", "Data-derived observations and retention hypotheses")
+        tabs = st.tabs(["Key findings", "Risk signals", "Opportunities", "Recommended actions"])
+        for tab, key, tone in zip(tabs, ["key_findings", "risks", "opportunities", "actions"],
+                                  ["teal", "red", "green", "orange"]):
+            with tab:
+                for i, text in enumerate(insights[key], 1):
+                    insight_card(text, i, tone)
 
-    with col_d:
-        section_header("Monthly Charges vs Churn")
-        sample = df.sample(min(1000, len(df)), random_state=42)
-        fig4 = px.box(
-            sample, x=TARGET_COL, y="MonthlyCharges",
-            color=TARGET_COL,
-            color_discrete_map={0: "#27ae60", 1: "#e74c3c"},
-            labels={TARGET_COL: "Churn (0=No, 1=Yes)", "MonthlyCharges": "Monthly Charges ($)"},
-        )
-        fig4.update_layout(margin=dict(t=10, b=10), showlegend=False)
-        st.plotly_chart(fig4, use_container_width=True)
-
-    # Executive Insights
-    st.markdown("---")
-    section_header("🔍 Executive Insights")
-    st.caption(
-        "All percentages and counts below are computed at runtime from the cleaned dataset. "
-        "Figures labelled 'model-predicted' or 'ML model' are outputs of the trained classifier — "
-        "they indicate association, not confirmed causal relationships."
-    )
-    tab1, tab2, tab3, tab4 = st.tabs(["Key Findings", "Risks", "Opportunities", "Recommended Actions"])
-
-    with tab1:
-        for i, finding in enumerate(insights["key_findings"], 1):
-            st.markdown(f'<div class="insight-box">📌 <b>Finding {i}:</b> {finding}</div>', unsafe_allow_html=True)
-    with tab2:
-        for i, risk in enumerate(insights["risks"], 1):
-            st.markdown(f'<div class="insight-box risk-box">⚠️ <b>Risk {i}:</b> {risk}</div>', unsafe_allow_html=True)
-    with tab3:
-        for i, oppty in enumerate(insights["opportunities"], 1):
-            st.markdown(f'<div class="insight-box oppty-box">✅ <b>Opportunity {i}:</b> {oppty}</div>', unsafe_allow_html=True)
-    with tab4:
-        for i, action in enumerate(insights["actions"], 1):
-            st.markdown(f'<div class="insight-box action-box">🎯 <b>Action {i}:</b> {action}</div>', unsafe_allow_html=True)
+    with st.expander("About this dataset · cleaning audit & KPI definitions"):
+        st.markdown(f"""
+| Preparation step | Records removed | Records remaining |
+|:--|--:|--:|
+| Raw CSV | — | {cleaning_log['raw_rows']:,} |
+| Remove blank TotalCharges | {cleaning_log['dropped_blank_totalcharges']:,} | {cleaning_log['after_totalcharges_drop']:,} |
+| Remove duplicates after excluding customerID | {cleaning_log['dropped_duplicates']:,} | {cleaning_log['final_rows']:,} |
+""")
+        st.caption(f"Average tenure: {kpis['Avg Tenure (months)']:.1f} months. Monthly charges base sums all analytical records, "
+                   "including churned customers. Revenue at risk sums monthly charges for model-predicted high-risk customers; "
+                   "it is potential exposure, not confirmed lost revenue. Feature importance describes association, not causation.")
 
 
 # ---- PAGE 2: Churn & Customer Analysis ----
 
+ANALYSIS_FILTERS = ["Contract", "InternetService", "PaymentMethod", "SeniorCitizen", "gender", "RiskCategory"]
+
+
+def reset_analysis_filters():
+    for column in ANALYSIS_FILTERS:
+        st.session_state[f"filter_{column}"] = "All"
+
+
 def page_churn_analysis(df, pred_df):
-    st.title("📊 Churn & Customer Analysis")
-    st.markdown("*Use sidebar filters to drill down into specific customer segments.*")
-    st.markdown("---")
+    page_header("Workspace / Customer analysis", "Find the patterns behind churn",
+                "Compare customer segments to understand where retention needs the most attention.")
+    labels = ["Contract", "Internet service", "Payment method", "Senior citizen", "Gender", "Risk level"]
+    selected = {}
+    with st.expander("Filter customer segments", expanded=True):
+        columns = st.columns(3)
+        for i, (column, label) in enumerate(zip(ANALYSIS_FILTERS, labels)):
+            options = (["Non-Senior", "Senior Citizen"] if column == "SeniorCitizen" else
+                       RISK_ORDER if column == "RiskCategory" else sorted(df[column].unique().tolist()))
+            with columns[i % 3]:
+                selected[column] = st.selectbox(label, ["All"] + options, key=f"filter_{column}")
+        active = sum(value != "All" for value in selected.values())
+        summary, reset = st.columns([3, 1], vertical_alignment="center")
+        with summary:
+            st.caption(f"{active} active filter{'s' if active != 1 else ''} · charts update as you refine your segment")
+        with reset:
+            st.button("Reset filters", on_click=reset_analysis_filters, width="stretch")
 
-    # Sidebar Filters
-    st.sidebar.markdown("## 🔧 Filters")
-    contracts      = ["All"] + sorted(df["Contract"].unique().tolist())
-    internet_types = ["All"] + sorted(df["InternetService"].unique().tolist())
-    pay_methods    = ["All"] + sorted(df["PaymentMethod"].unique().tolist())
-    senior_opts    = ["All", "Senior Citizen", "Non-Senior"]
-    gender_opts    = ["All"] + sorted(df["gender"].unique().tolist())
-    risk_opts      = ["All", "High Risk", "Medium Risk", "Low Risk"]
-
-    f_contract = st.sidebar.selectbox("Contract",          contracts)
-    f_internet = st.sidebar.selectbox("Internet Service",  internet_types)
-    f_payment  = st.sidebar.selectbox("Payment Method",    pay_methods)
-    f_senior   = st.sidebar.selectbox("Senior Citizen",    senior_opts)
-    f_gender   = st.sidebar.selectbox("Gender",            gender_opts)
-    f_risk     = st.sidebar.selectbox("Risk Level",        risk_opts)
-
-    # Apply filters
     filtered = pred_df.copy()
-    if f_contract != "All": filtered = filtered[filtered["Contract"] == f_contract]
-    if f_internet != "All": filtered = filtered[filtered["InternetService"] == f_internet]
-    if f_payment  != "All": filtered = filtered[filtered["PaymentMethod"] == f_payment]
-    if f_senior == "Senior Citizen":  filtered = filtered[filtered["SeniorCitizen"] == 1]
-    elif f_senior == "Non-Senior":    filtered = filtered[filtered["SeniorCitizen"] == 0]
-    if f_gender   != "All": filtered = filtered[filtered["gender"] == f_gender]
-    if f_risk     != "All": filtered = filtered[filtered["RiskCategory"] == f_risk]
+    for column, value in selected.items():
+        if value == "All":
+            continue
+        if column == "SeniorCitizen":
+            value = 1 if value == "Senior Citizen" else 0
+        filtered = filtered[filtered[column] == value]
 
-    st.markdown(f"**Filtered Dataset:** {len(filtered):,} customers")
-    st.markdown("---")
+    if filtered.empty:
+        with st.container(border=True, key="panel-empty-segment"):
+            section_header("No customers match these filters")
+            st.write("Try a broader segment or reset your filters to explore all customers.")
+        return
 
-    # Charts
-    col1, col2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        kpi_card("Customers in this segment", f"{len(filtered):,}", "blue", note=f"{len(filtered)/len(df):.1%} of the full dataset")
+    with c2:
+        kpi_card("Segment churn rate", f"{filtered[TARGET_COL].mean()*100:.1f}", "red", "%", note="Observed churn in the selected segment")
+    with c3:
+        kpi_card("High-risk customers", f"{(filtered['RiskCategory'] == 'High Risk').sum():,}", "red",
+                 note=f"Model-predicted probability above {MEDIUM_RISK_THRESHOLD:.0%}")
 
-    with col1:
-        section_header("Churn by Tenure (months)")
-        bins = [0, 12, 24, 36, 48, 60, 72]
-        labels_bins = ["0–12", "13–24", "25–36", "37–48", "49–60", "61–72"]
-        filtered["TenureBin"] = pd.cut(filtered["tenure"], bins=bins, labels=labels_bins, right=True)
-        tenure_churn = churn_rate_by(filtered, "TenureBin")
-        fig = px.bar(
-            tenure_churn, x="TenureBin", y="ChurnRate",
-            color="ChurnRate", color_continuous_scale="RdYlGn_r",
-            text="ChurnRate",
-            labels={"ChurnRate": "Churn Rate (%)", "TenureBin": "Tenure (months)"},
-        )
-        fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-        fig.update_layout(margin=dict(t=10, b=10), coloraxis_showscale=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-    with col2:
-        section_header("Churn by Payment Method")
-        pay_churn = churn_rate_by(filtered, "PaymentMethod")
-        fig2 = px.bar(
-            pay_churn, x="PaymentMethod", y="ChurnRate",
-            color="ChurnRate", color_continuous_scale="RdYlGn_r",
-            text="ChurnRate",
-            labels={"ChurnRate": "Churn Rate (%)"},
-        )
-        fig2.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-        fig2.update_layout(
-            margin=dict(t=10, b=10), coloraxis_showscale=False,
-            xaxis=dict(tickangle=-20)
-        )
-        st.plotly_chart(fig2, use_container_width=True)
-
-    col3, col4 = st.columns(2)
-
-    with col3:
-        section_header("Churn by Internet Service")
-        inet_churn = churn_rate_by(filtered, "InternetService")
-        fig3 = px.bar(
-            inet_churn, x="InternetService", y="ChurnRate",
-            color="ChurnRate", color_continuous_scale="RdYlGn_r",
-            text="ChurnRate",
-            labels={"ChurnRate": "Churn Rate (%)"},
-        )
-        fig3.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-        fig3.update_layout(margin=dict(t=10, b=10), coloraxis_showscale=False)
-        st.plotly_chart(fig3, use_container_width=True)
-
-    with col4:
-        section_header("Churn by Online Security")
-        sec_churn = churn_rate_by(filtered, "OnlineSecurity")
-        fig4 = px.bar(
-            sec_churn, x="OnlineSecurity", y="ChurnRate",
-            color="ChurnRate", color_continuous_scale="RdYlGn_r",
-            text="ChurnRate",
-        )
-        fig4.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-        fig4.update_layout(margin=dict(t=10, b=10), coloraxis_showscale=False)
-        st.plotly_chart(fig4, use_container_width=True)
-
-    col5, col6 = st.columns(2)
-
-    with col5:
-        section_header("Monthly Charges Distribution by Churn")
-        fig5 = px.histogram(
-            filtered, x="MonthlyCharges", color=TARGET_COL,
-            nbins=40,
-            color_discrete_map={0: "#27ae60", 1: "#e74c3c"},
-            barmode="overlay", opacity=0.75,
-            labels={TARGET_COL: "Churn (0=No, 1=Yes)"},
-        )
-        fig5.update_layout(margin=dict(t=10, b=10))
-        st.plotly_chart(fig5, use_container_width=True)
-
-    with col6:
-        section_header("Tech Support & Churn")
-        tech_churn = churn_rate_by(filtered, "TechSupport")
-        fig6 = px.bar(
-            tech_churn, x="TechSupport", y="ChurnRate",
-            color="ChurnRate", color_continuous_scale="RdYlGn_r",
-            text="ChurnRate",
-        )
-        fig6.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-        fig6.update_layout(margin=dict(t=10, b=10), coloraxis_showscale=False)
-        st.plotly_chart(fig6, use_container_width=True)
-
-    # Additional analysis
-    section_header("Churn by Gender & Senior Citizen Status")
-    col7, col8 = st.columns(2)
-
-    with col7:
-        gender_churn = churn_rate_by(filtered, "gender")
-        fig7 = px.bar(
-            gender_churn, x="gender", y="ChurnRate",
-            color="gender",
-            color_discrete_sequence=["#3b6fd4", "#e74c3c"],
-            text="ChurnRate",
-        )
-        fig7.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-        fig7.update_layout(margin=dict(t=10, b=10), showlegend=False)
-        st.plotly_chart(fig7, use_container_width=True)
-
-    with col8:
-        filtered["SeniorLabel"] = filtered["SeniorCitizen"].map({0: "Non-Senior", 1: "Senior Citizen"})
-        senior_churn = churn_rate_by(filtered, "SeniorLabel")
-        fig8 = px.bar(
-            senior_churn, x="SeniorLabel", y="ChurnRate",
-            color="SeniorLabel",
-            color_discrete_sequence=["#27ae60", "#e74c3c"],
-            text="ChurnRate",
-        )
-        fig8.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-        fig8.update_layout(margin=dict(t=10, b=10), showlegend=False)
-        st.plotly_chart(fig8, use_container_width=True)
+    account, services, demographics = st.tabs(["Account & billing", "Services", "Demographics"])
+    with account:
+        left, right = st.columns(2)
+        filtered["TenureBin"] = pd.cut(filtered["tenure"], [0, 12, 24, 36, 48, 60, 72],
+                                       labels=["0–12", "13–24", "25–36", "37–48", "49–60", "61–72"], include_lowest=True)
+        with left:
+            churn_rate_chart(filtered, "TenureBin", "Churn by tenure (months)")
+        with right:
+            churn_rate_chart(filtered, "PaymentMethod", "Churn by payment method", horizontal=True)
+        with st.container(border=True, key="panel-billing-distribution"):
+            section_header("Monthly charges distribution", "Compare billing patterns among churned and retained customers")
+            filtered["Status"] = filtered[TARGET_COL].map({0: "Retained", 1: "Churned"})
+            fig = px.histogram(filtered, x="MonthlyCharges", color="Status", nbins=40,
+                               color_discrete_map=CHURN_COLORS, barmode="overlay", opacity=0.75,
+                               labels={"MonthlyCharges": "Monthly charges ($)", "count": "Customers"})
+            chart(fig)
+    with services:
+        left, right = st.columns(2)
+        with left:
+            churn_rate_chart(filtered, "InternetService", "Internet service")
+            churn_rate_chart(filtered, "TechSupport", "Technical support")
+        with right:
+            churn_rate_chart(filtered, "OnlineSecurity", "Online security")
+    with demographics:
+        left, right = st.columns(2)
+        with left:
+            churn_rate_chart(filtered, "gender", "Churn by gender")
+        with right:
+            filtered["SeniorLabel"] = filtered["SeniorCitizen"].map({0: "Non-Senior", 1: "Senior Citizen"})
+            churn_rate_chart(filtered, "SeniorLabel", "Senior citizen status")
 
 
 # ---- PAGE 3: Risk, Opportunity & Action ----
 
 def page_risk_action(df, pred_df, fi_df, kpis, insights):
-    st.title("🎯 Risk, Opportunity & Action")
-    st.markdown("---")
-
-    # ---- RISK SECTION ----
-    section_header("⚠️ Churn Risk Analysis")
+    page_header("Workspace / Retention priorities", "Turn risk signals into action",
+                "Explore your highest-risk segments and build a focused retention shortlist.")
 
     high_risk = pred_df[pred_df["RiskCategory"] == "High Risk"]
     med_risk  = pred_df[pred_df["RiskCategory"] == "Medium Risk"]
@@ -833,150 +697,129 @@ def page_risk_action(df, pred_df, fi_df, kpis, insights):
     revenue_at_risk = high_risk["MonthlyCharges"].sum()
 
     r1, r2, r3, r4 = st.columns(4)
-    with r1: kpi_card("High-Risk Customers",  f"{len(high_risk):,}", "red")
-    with r2: kpi_card("Medium-Risk Customers",f"{len(med_risk):,}",  "orange")
-    with r3: kpi_card("Low-Risk Customers",   f"{len(low_risk):,}",  "green")
-    with r4: kpi_card("Model-Predicted Revenue at Risk ($/mo)", f"${revenue_at_risk:,.0f}", "red")
+    with r1: kpi_card("High risk", f"{len(high_risk):,}", "red", note=f"Predicted probability > {MEDIUM_RISK_THRESHOLD:.0%}")
+    with r2: kpi_card("Medium risk", f"{len(med_risk):,}", "orange", note=f"Predicted probability > {LOW_RISK_THRESHOLD:.0%} to {MEDIUM_RISK_THRESHOLD:.0%}")
+    with r3: kpi_card("Low risk", f"{len(low_risk):,}", "green", note=f"Predicted probability ≤ {LOW_RISK_THRESHOLD:.0%}")
+    with r4: kpi_card("Monthly exposure", f"${revenue_at_risk/1000:,.1f}k", "red", note="Monthly charges in the high-risk segment")
     st.caption(
-        f"Risk categories are assigned by the ML model: High Risk = predicted churn probability "
-        f"> {MEDIUM_RISK_THRESHOLD:.0%}, Medium Risk = {LOW_RISK_THRESHOLD:.0%}–{MEDIUM_RISK_THRESHOLD:.0%}, "
-        f"Low Risk = < {LOW_RISK_THRESHOLD:.0%}. "
-        "'Revenue at Risk' is the sum of MonthlyCharges for all model-predicted High-Risk customers — "
-        "it represents potential exposure, not confirmed lost revenue."
+        "Risk segments are model predictions. Monthly exposure represents potential revenue at risk, not confirmed lost revenue."
     )
 
     col_r1, col_r2 = st.columns(2)
 
-    with col_r1:
-        section_header("Risk Distribution by Contract")
-        risk_contract = pred_df.groupby(["Contract", "RiskCategory"]).size().reset_index(name="Count")
+    with col_r1, st.container(border=True, key="panel-risk-contract"):
+        section_header("Where risk is concentrated", "Customer risk by contract type")
+        risk_contract = pred_df.groupby(["Contract", "RiskCategory"], observed=False).size().reset_index(name="Count")
         fig_r1 = px.bar(
             risk_contract, x="Contract", y="Count", color="RiskCategory",
-            color_discrete_map={"High Risk": "#e74c3c", "Medium Risk": "#f39c12", "Low Risk": "#27ae60"},
-            barmode="stack",
+            color_discrete_map=RISK_COLORS, category_orders={"RiskCategory": RISK_ORDER},
+            barmode="stack", labels={"Count": "Customers", "Contract": ""},
         )
-        fig_r1.update_layout(margin=dict(t=10, b=10))
-        st.plotly_chart(fig_r1, use_container_width=True)
+        fig_r1.update_layout(bargap=0.45)
+        chart(fig_r1, height=370)
 
-    with col_r2:
-        section_header("Top 10 Churn Drivers (Feature Importance)")
+    with col_r2, st.container(border=True, key="panel-feature-importance"):
+        section_header("What the model pays attention to", "Top 10 predictive features · aggregated importance")
         top10 = fi_df.head(10).sort_values("Importance")
         fig_r2 = px.bar(
             top10, x="Importance", y="OriginalFeature", orientation="h",
-            color="Importance", color_continuous_scale="Blues",
-            labels={"OriginalFeature": "Feature", "Importance": "Importance Score"},
+            color_discrete_sequence=[COLORS["teal"]],
+            labels={"OriginalFeature": "", "Importance": "Importance score"},
         )
-        fig_r2.update_layout(margin=dict(t=10, b=10), coloraxis_showscale=False)
-        st.plotly_chart(fig_r2, use_container_width=True)
-        st.caption(
-            "Importance scores are aggregated across one-hot-encoded sub-features "
-            "back to the original column name. For Random Forest: Mean Decrease in "
-            "Impurity (MDI). For Logistic Regression: absolute value of the "
-            "standardised coefficient. These measure predictive association — "
-            "they do not establish causation."
-        )
+        chart(fig_r2, height=370)
+    st.caption("Feature importance uses Random Forest impurity reduction or Logistic Regression absolute coefficients. Scores indicate predictive association, not causation.")
 
-    # Risk insights
-    for risk_text in insights["risks"]:
-        st.markdown(f'<div class="insight-box risk-box">⚠️ {risk_text}</div>', unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # ---- OPPORTUNITY SECTION ----
-    section_header("✅ Retention Opportunities")
-
-    col_o1, col_o2 = st.columns(2)
-
-    with col_o1:
-        section_header("Churn Rate by Paperless Billing")
-        pb_churn = churn_rate_by(df, "PaperlessBilling")
-        fig_o1 = px.bar(
-            pb_churn, x="PaperlessBilling", y="ChurnRate",
-            color="PaperlessBilling",
-            color_discrete_sequence=["#27ae60", "#e74c3c"],
-            text="ChurnRate",
-        )
-        fig_o1.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
-        fig_o1.update_layout(margin=dict(t=10, b=10), showlegend=False)
-        st.plotly_chart(fig_o1, use_container_width=True)
-
-    with col_o2:
-        section_header("Churn by Tenure Groups")
-        bins = [0, 12, 24, 48, 72]
-        labels_b = ["0–12 mo", "13–24 mo", "25–48 mo", "49–72 mo"]
-        df_copy = df.copy()
-        df_copy["TenureGroup"] = pd.cut(df_copy["tenure"], bins=bins, labels=labels_b, right=True)
-        tg_churn = churn_rate_by(df_copy, "TenureGroup")
-        fig_o2 = px.line(
-            tg_churn, x="TenureGroup", y="ChurnRate",
-            markers=True, text="ChurnRate",
-            labels={"ChurnRate": "Churn Rate (%)", "TenureGroup": "Tenure Group"},
-            color_discrete_sequence=["#3b6fd4"],
-        )
-        fig_o2.update_traces(texttemplate="%{text:.1f}%", textposition="top center")
-        fig_o2.update_layout(margin=dict(t=10, b=10))
-        st.plotly_chart(fig_o2, use_container_width=True)
-
-    for oppty in insights["opportunities"]:
-        st.markdown(f'<div class="insight-box oppty-box">✅ {oppty}</div>', unsafe_allow_html=True)
-
-    st.markdown("---")
-
-    # ---- ACTION SECTION ----
-    section_header("🎯 Recommended Business Actions")
-    for i, action in enumerate(insights["actions"], 1):
-        st.markdown(f'<div class="insight-box action-box"><b>Action {i}:</b> {action}</div>', unsafe_allow_html=True)
-
-    # High-Risk Customer Table
-    st.markdown("---")
-    section_header("High-Risk Customer Snapshot (Top 20 by Churn Probability)")
+    section_header("High-risk customer shortlist", "Top 20 records ranked by predicted churn probability")
     display_cols = ["tenure", "Contract", "MonthlyCharges", "InternetService",
-                    "PaymentMethod", "TechSupport", "ChurnProbability", "RiskCategory"]
-    available_cols = [c for c in display_cols if c in high_risk.columns]
-    top20 = high_risk.nlargest(20, "ChurnProbability")[available_cols].reset_index(drop=True)
-    st.dataframe(top20.style.format({"ChurnProbability": "{:.1%}", "MonthlyCharges": "${:.2f}"}),
-                 use_container_width=True)
+                    "PaymentMethod", "TechSupport", "ChurnProbability"]
+    ranked = high_risk.sort_values("ChurnProbability", ascending=False)[display_cols].copy()
+    # Keep source row numbers so exported records can be located in the CSV.
+    ranked.insert(0, "SourceRow", ranked.index + 2)
+    st.dataframe(
+        ranked.head(20), hide_index=True, width="stretch",
+        column_config={
+            "SourceRow": st.column_config.NumberColumn("CSV row", help="Row number in the source CSV, including its header", format="%d"),
+            "tenure": st.column_config.NumberColumn("Tenure (mo)", format="%d"),
+            "MonthlyCharges": st.column_config.NumberColumn("Monthly charges", format="$%.2f"),
+            "InternetService": "Internet service", "PaymentMethod": "Payment method", "TechSupport": "Tech support",
+            "ChurnProbability": st.column_config.ProgressColumn("Churn probability", min_value=0, max_value=1, format="percent"),
+        },
+    )
+    st.download_button("Download all high-risk records (CSV)", ranked.to_csv(index=False).encode("utf-8"),
+                       file_name="high_risk_customers.csv", mime="text/csv")
+
+    actions, opportunities = st.tabs(["Recommended actions", "Retention opportunities"])
+    with actions:
+        for i, text in enumerate(insights["actions"], 1):
+            insight_card(text, i, "orange")
+    with opportunities:
+        left, right = st.columns(2)
+        with left:
+            churn_rate_chart(df, "PaperlessBilling", "Paperless billing")
+        with right:
+            grouped = df.copy()
+            grouped["TenureGroup"] = pd.cut(grouped["tenure"], [0, 12, 24, 48, 72],
+                                             labels=["0–12 mo", "13–24 mo", "25–48 mo", "49–72 mo"], include_lowest=True)
+            churn_rate_chart(grouped, "TenureGroup", "Tenure & retention")
+        for i, text in enumerate(insights["opportunities"], 1):
+            insight_card(text, i, "green")
 
 
 # ---- PAGE 4: Individual Customer Prediction ----
 
 def page_prediction(pipeline, fi_df):
-    st.title("🔮 Individual Customer Churn Prediction")
-    st.markdown("*Enter customer details to predict churn probability and get personalised retention advice.*")
-    st.markdown("---")
+    page_header("Workspace / Customer prediction", "A clearer view of customer risk",
+                "Enter a customer profile to estimate churn probability and explore a recommended next step.")
+    form_column, guide_column = st.columns([2, 1])
+    with form_column, st.form("prediction_form"):
+        section_header("Customer profile", "Review all three sections before generating a prediction.")
+        account, services, profile = st.tabs(["Account & billing", "Services", "Customer details"])
+        with account:
+            col1, col2 = st.columns(2)
+            with col1:
+                contract = st.selectbox("Contract", ["Month-to-month", "One year", "Two year"])
+                tenure = st.slider("Tenure (months)", 0, 72, 12)
+                payment = st.selectbox("Payment method", ["Electronic check", "Mailed check",
+                                                           "Bank transfer (automatic)", "Credit card (automatic)"])
+            with col2:
+                monthly_charges = st.number_input("Monthly charges ($)", 0.0, 200.0, 65.0, step=0.5)
+                total_charges = st.number_input("Total charges ($)", 0.0, 10000.0, 780.0, step=1.0,
+                                                help="Enter the actual cumulative billed amount; this field is not calculated automatically.")
+                paperless = st.selectbox("Paperless billing", ["Yes", "No"])
+        with services:
+            col1, col2, col3 = st.columns(3)
+            service_options = ["Yes", "No", "No internet service"]
+            with col1:
+                internet = st.selectbox("Internet service", ["DSL", "Fiber optic", "No"])
+                phone_service = st.selectbox("Phone service", ["Yes", "No"])
+                multiple_lines = st.selectbox("Multiple lines", ["Yes", "No", "No phone service"])
+            with col2:
+                tech_support = st.selectbox("Tech support", service_options)
+                online_security = st.selectbox("Online security", service_options)
+                online_backup = st.selectbox("Online backup", service_options)
+            with col3:
+                device_prot = st.selectbox("Device protection", service_options)
+                streaming_tv = st.selectbox("Streaming TV", service_options)
+                streaming_movies = st.selectbox("Streaming movies", service_options)
+        with profile:
+            col1, col2 = st.columns(2)
+            with col1:
+                gender = st.selectbox("Gender", ["Male", "Female"])
+                senior = st.selectbox("Senior citizen", [0, 1], format_func=lambda x: "Yes" if x else "No")
+            with col2:
+                partner = st.selectbox("Partner", ["Yes", "No"])
+                dependents = st.selectbox("Dependents", ["Yes", "No"])
+        submitted = st.form_submit_button("Generate risk prediction →", type="primary", width="stretch")
 
-    with st.form("prediction_form"):
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            tenure          = st.slider("Tenure (months)", 0, 72, 12)
-            monthly_charges = st.number_input("Monthly Charges ($)", 0.0, 200.0, 65.0, step=0.5)
-            total_charges   = st.number_input("Total Charges ($)",   0.0, 10000.0,
-                                              float(tenure * monthly_charges), step=1.0)
-            senior          = st.selectbox("Senior Citizen", [0, 1], format_func=lambda x: "Yes" if x else "No")
-
-        with col2:
-            contract        = st.selectbox("Contract",        ["Month-to-month", "One year", "Two year"])
-            internet        = st.selectbox("Internet Service", ["DSL", "Fiber optic", "No"])
-            payment         = st.selectbox("Payment Method",  ["Electronic check", "Mailed check",
-                                                                "Bank transfer (automatic)",
-                                                                "Credit card (automatic)"])
-            paperless       = st.selectbox("Paperless Billing", ["Yes", "No"])
-
-        with col3:
-            tech_support    = st.selectbox("Tech Support",    ["Yes", "No", "No internet service"])
-            online_security = st.selectbox("Online Security", ["Yes", "No", "No internet service"])
-            online_backup   = st.selectbox("Online Backup",   ["Yes", "No", "No internet service"])
-            device_prot     = st.selectbox("Device Protection", ["Yes", "No", "No internet service"])
-            partner         = st.selectbox("Partner",         ["Yes", "No"])
-            dependents      = st.selectbox("Dependents",      ["Yes", "No"])
-            gender          = st.selectbox("Gender",          ["Male", "Female"])
-            phone_service   = st.selectbox("Phone Service",   ["Yes", "No"])
-            multiple_lines  = st.selectbox("Multiple Lines",  ["Yes", "No", "No phone service"])
-            streaming_tv    = st.selectbox("Streaming TV",    ["Yes", "No", "No internet service"])
-            streaming_movies= st.selectbox("Streaming Movies",["Yes", "No", "No internet service"])
-
-        submitted = st.form_submit_button("Predict Churn Risk", use_container_width=True)
+    with guide_column, st.container(border=True, key="panel-prediction-guide"):
+        section_header("Reading your prediction")
+        st.markdown('<p class="prediction-guide">The model combines billing, service, and customer details into '
+                    'a probability score. Use the risk band to help prioritise your next conversation.</p>'
+                    f'<div class="risk-band tone-green"><strong>Low risk</strong><span>0–{LOW_RISK_THRESHOLD:.0%}</span></div>'
+                    f'<div class="risk-band tone-orange"><strong>Medium risk</strong><span>Above {LOW_RISK_THRESHOLD:.0%} to {MEDIUM_RISK_THRESHOLD:.0%}</span></div>'
+                    f'<div class="risk-band tone-red"><strong>High risk</strong><span>Above {MEDIUM_RISK_THRESHOLD:.0%}</span></div>',
+                    unsafe_allow_html=True)
+        st.caption("19 customer attributes · the saved model scores your profile when you submit.")
 
     if submitted:
         input_data = pd.DataFrame([{
@@ -1003,17 +846,17 @@ def page_prediction(pipeline, fi_df):
 
         proba = pipeline.predict_proba(input_data)[0][1]
 
-        if proba < LOW_RISK_THRESHOLD:
-            risk_label = "🟢 Low Risk"
-            risk_color = "#27ae60"
+        if proba <= LOW_RISK_THRESHOLD:
+            risk_label = "Low risk"
+            risk_tone = "green"
             action = (
-                f"This customer's predicted churn probability is {proba:.1%}, which is below the "
+                f"This customer's predicted churn probability is {proba:.1%}, which is at or below the "
                 f"{LOW_RISK_THRESHOLD:.0%} Low Risk threshold. No immediate intervention required. "
                 "Continue standard service quality."
             )
-        elif proba < MEDIUM_RISK_THRESHOLD:
-            risk_label = "🟡 Medium Risk"
-            risk_color = "#f39c12"
+        elif proba <= MEDIUM_RISK_THRESHOLD:
+            risk_label = "Medium risk"
+            risk_tone = "orange"
             # Build a context-aware note based on the customer's own inputs
             _risk_factors = []
             if contract == "Month-to-month":
@@ -1032,8 +875,8 @@ def page_prediction(pipeline, fi_df):
                 "Consider a proactive outreach call and targeted service offer."
             )
         else:
-            risk_label = "🔴 High Risk"
-            risk_color = "#e74c3c"
+            risk_label = "High risk"
+            risk_tone = "red"
             _risk_factors = []
             if contract == "Month-to-month":
                 _risk_factors.append("month-to-month contract")
@@ -1053,80 +896,69 @@ def page_prediction(pipeline, fi_df):
                 "and/or bundling TechSupport and OnlineSecurity."
             )
 
-        st.markdown("---")
-        st.markdown("### Prediction Results")
+        section_header("Your prediction", "Results for the customer profile submitted above")
         p1, p2, p3 = st.columns(3)
         with p1:
-            st.markdown(f"""
-            <div class="metric-card" style="border-left-color:{risk_color}">
-                <div class="metric-value">{proba:.1%}</div>
-                <div class="metric-label">Churn Probability</div>
-            </div>""", unsafe_allow_html=True)
+            kpi_card("Churn probability", f"{proba:.1%}", risk_tone, note="Model-estimated likelihood")
         with p2:
-            st.markdown(f"""
-            <div class="metric-card" style="border-left-color:{risk_color}">
-                <div class="metric-value">{risk_label}</div>
-                <div class="metric-label">Risk Category</div>
-            </div>""", unsafe_allow_html=True)
+            kpi_card("Risk category", risk_label, risk_tone, note=f"Based on {LOW_RISK_THRESHOLD:.0%} and {MEDIUM_RISK_THRESHOLD:.0%} cutoffs")
         with p3:
-            churn_pred = "Will Churn" if proba >= 0.5 else "Will Not Churn"
-            pred_color = "#e74c3c" if proba >= 0.5 else "#27ae60"
-            st.markdown(f"""
-            <div class="metric-card" style="border-left-color:{pred_color}">
-                <div class="metric-value">{churn_pred}</div>
-                <div class="metric-label">Model Prediction (50% threshold)</div>
-            </div>""", unsafe_allow_html=True)
+            kpi_card("Predicted outcome", "Churn" if proba >= 0.5 else "Retain",
+                     "red" if proba >= 0.5 else "green", note="Classification threshold: ≥ 50%")
 
         # Probability gauge
         fig_gauge = go.Figure(go.Indicator(
             mode="gauge+number",
             value=proba * 100,
-            title={"text": "Churn Probability (%)"},
             gauge={
-                "axis": {"range": [0, 100]},
-                "bar": {"color": risk_color},
+                "axis": {"range": [0, 100], "tickwidth": 0, "ticksuffix": "%"},
+                "bar": {"color": COLORS[risk_tone], "thickness": 0.65},
+                "borderwidth": 0,
                 "steps": [
-                    {"range": [0, 30],  "color": "#d5f5e3"},
-                    {"range": [30, 60], "color": "#fef9e7"},
-                    {"range": [60, 100],"color": "#fadbd8"},
+                    {"range": [0, LOW_RISK_THRESHOLD * 100], "color": "#eaf5f2"},
+                    {"range": [LOW_RISK_THRESHOLD * 100, MEDIUM_RISK_THRESHOLD * 100], "color": "#fbf5e8"},
+                    {"range": [MEDIUM_RISK_THRESHOLD * 100, 100], "color": "#fdf0f1"},
                 ],
                 "threshold": {
-                    "line": {"color": "black", "width": 3},
+                    "line": {"color": COLORS["ink"], "width": 2},
                     "thickness": 0.75,
                     "value": proba * 100,
                 },
             },
-            number={"suffix": "%", "font": {"size": 30}},
+            number={"suffix": "%", "valueformat": ".1f", "font": {"size": 38, "color": COLORS["ink"]}},
         ))
-        fig_gauge.update_layout(height=300, margin=dict(t=30, b=10))
-        st.plotly_chart(fig_gauge, use_container_width=True)
-
-        # Key factors
-        st.markdown("### Key Factors Influencing This Prediction")
-        top_factors = fi_df.head(5)
-        for _, row in top_factors.iterrows():
-            st.markdown(f"- **{row['OriginalFeature']}** — Importance Score: `{row['Importance']:.4f}`")
-
-        # Recommended action
-        st.markdown("### Recommended Retention Action")
-        st.markdown(f'<div class="insight-box action-box">🎯 {action}</div>', unsafe_allow_html=True)
-
-        # Risk threshold note
-        st.info(
-            f"*Note: Risk thresholds — Low Risk: < {LOW_RISK_THRESHOLD:.0%}  |  "
-            f"Medium Risk: {LOW_RISK_THRESHOLD:.0%}–{MEDIUM_RISK_THRESHOLD:.0%}  |  "
-            f"High Risk: > {MEDIUM_RISK_THRESHOLD:.0%}.*  "
-            "Model prediction uses Churn Probability > 50% as decision boundary."
-        )
+        left, right = st.columns(2)
+        with left, st.container(border=True, key="panel-probability-gauge"):
+            section_header("Churn probability")
+            chart(fig_gauge, height=280)
+        with right, st.container(border=True, key="panel-prediction-features"):
+            section_header("Top model-wide predictors", "Overall importance, not an explanation of this individual score")
+            factors = fi_df.head(5).sort_values("Importance")
+            fig = px.bar(factors, x="Importance", y="OriginalFeature", orientation="h",
+                         color_discrete_sequence=[COLORS["teal"]], labels={"OriginalFeature": "", "Importance": "Importance score"})
+            chart(fig, height=255)
+        section_header("Recommended next step")
+        insight_card(action, tone=risk_tone)
 
 
 # ---- PAGE 5: Model Performance ----
 
 def page_model_performance(results, X_test, y_test, best_name):
-    st.title("🤖 Machine Learning Model Performance")
-    st.markdown("---")
+    page_header("Workspace / Model performance", "Confidence, backed by evaluation",
+                "Compare the models and understand how well they identify customers who churn.",
+                badge=f"Held-out test set · {len(y_test):,} customers")
+    best_metrics = results[best_name]
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        kpi_card("Selected model ROC-AUC", f"{best_metrics['ROC-AUC']:.3f}", "teal", note=best_name)
+    with c2:
+        kpi_card("Recall", f"{best_metrics['Recall']:.1%}", "blue", note="Share of actual churners identified")
+    with c3:
+        kpi_card("Precision", f"{best_metrics['Precision']:.1%}", "orange", note="Correct among predicted churners")
+    with c4:
+        kpi_card("F1 score", f"{best_metrics['F1 Score']:.3f}", "teal", note="Balance of precision and recall")
 
-    section_header("Model Comparison")
+    section_header("Model comparison", "Selected by highest ROC-AUC on the held-out test set")
     metric_names = ["Accuracy", "Precision", "Recall", "F1 Score", "ROC-AUC"]
     rows = []
     for model_name, metrics in results.items():
@@ -1135,69 +967,59 @@ def page_model_performance(results, X_test, y_test, best_name):
             row[m] = metrics[m]
         rows.append(row)
     comparison_df = pd.DataFrame(rows)
+    comparison_df.insert(1, "Selection", ["Selected" if name == best_name else "Baseline" for name in comparison_df["Model"]])
     st.dataframe(
-        comparison_df.style.highlight_max(subset=metric_names, color="#d5f5e3").format(
+        comparison_df.style.highlight_max(subset=metric_names, color="#eaf5f2").format(
             {m: "{:.4f}" for m in metric_names}
         ),
-        use_container_width=True,
-    )
-
-    best_metrics = results[best_name]
-    st.success(
-        f"✅ **Best Model: {best_name}** selected based on highest ROC-AUC "
-        f"({best_metrics['ROC-AUC']:.4f}). "
-        "ROC-AUC was used as the primary selection metric because it evaluates the model's "
-        "ability to rank customers by churn risk across all probability thresholds — making it "
-        "more informative than accuracy alone when the classes are imbalanced (~26% churn). "
-        "Note: the relative cost of False Negatives vs False Positives in this business context "
-        "is assumed, not measured — a production deployment should calibrate the decision "
-        "threshold against actual retention programme costs."
+        width="stretch", hide_index=True,
     )
 
     col1, col2 = st.columns(2)
 
-    with col1:
-        section_header("ROC Curves")
+    with col1, st.container(border=True, key="panel-roc-curves"):
+        section_header("Discrimination across thresholds", "ROC curves · closer to the upper-left corner is better")
         fig_roc = go.Figure()
         fig_roc.add_shape(type="line", x0=0, y0=0, x1=1, y1=1,
-                          line=dict(dash="dot", color="grey"))
-        colors = ["#3b6fd4", "#e74c3c"]
+                          line=dict(dash="dot", color="#bdc9d0"))
+        colors = [COLORS["teal"], COLORS["blue"]]
         for (model_name, metrics), color in zip(results.items(), colors):
             fpr, tpr, _ = roc_curve(y_test, metrics["y_proba"])
             fig_roc.add_trace(go.Scatter(
                 x=fpr, y=tpr, mode="lines",
                 name=f"{model_name} (AUC={metrics['ROC-AUC']:.3f})",
-                line=dict(color=color, width=2),
+                line=dict(color=color, width=2.5),
             ))
         fig_roc.update_layout(
             xaxis_title="False Positive Rate",
             yaxis_title="True Positive Rate",
-            margin=dict(t=20, b=20),
-            legend=dict(orientation="h", yanchor="bottom", y=0.02),
         )
-        st.plotly_chart(fig_roc, use_container_width=True)
+        chart(fig_roc, height=370)
 
-    with col2:
-        section_header(f"Confusion Matrix — {best_name}")
+    with col2, st.container(border=True, key="panel-confusion-matrix"):
+        section_header("Predictions vs actual outcomes", f"Confusion matrix · {best_name}")
         cm = confusion_matrix(y_test, best_metrics["y_pred"])
         fig_cm = px.imshow(
             cm,
             text_auto=True,
-            color_continuous_scale="Blues",
+            color_continuous_scale=["#edf6f3", COLORS["teal"]],
             x=["Predicted No Churn", "Predicted Churn"],
             y=["Actual No Churn",    "Actual Churn"],
         )
-        fig_cm.update_layout(margin=dict(t=10, b=10), coloraxis_showscale=False)
-        st.plotly_chart(fig_cm, use_container_width=True)
+        fig_cm.update_layout(coloraxis_showscale=False)
+        chart(fig_cm, height=370)
 
-    section_header(f"Classification Report — {best_name}")
     report = classification_report(y_test, best_metrics["y_pred"],
                                    target_names=["No Churn", "Churn"], output_dict=True)
     report_df = pd.DataFrame(report).transpose()
-    st.dataframe(
-        report_df.style.format("{:.3f}").highlight_max(axis=0, color="#d5f5e3"),
-        use_container_width=True,
-    )
+    with st.expander("Detailed classification report"):
+        st.dataframe(report_df.style.format("{:.3f}"), width="stretch")
+    with st.expander("How to interpret these results"):
+        st.write("ROC-AUC measures how well a model ranks churners above retained customers across thresholds. "
+                 "Both classifiers use balanced class weights and an 80/20 stratified train–test split. "
+                 "Recall measures how many actual churners are found; precision describes the reliability of churn alerts.")
+        st.caption("The 50% classification threshold is a default. Retention costs and the relative cost of missed churners "
+                   "are not measured in this dataset; threshold tuning should use actual programme costs.")
 
 
 # ---------------------------------------------------------------------------
@@ -1208,27 +1030,23 @@ def main():
     setup_page()
 
     # ---- Sidebar Navigation ----
-    st.sidebar.image(
-        "https://upload.wikimedia.org/wikipedia/commons/5/51/IBM_logo.svg",
-        width=80
-    )
-    st.sidebar.title("📡 Churn Intelligence")
-    st.sidebar.markdown("*IBM SkillsBuild Internship*")
-    st.sidebar.markdown("---")
+    sidebar_brand()
 
     pages = {
-        "🏠 Executive Overview"        : "overview",
-        "📊 Churn & Customer Analysis" : "analysis",
-        "🎯 Risk, Opportunity & Action": "risk",
-        "🔮 Customer Prediction"       : "prediction",
-        "🤖 Model Performance"         : "model",
+        "Overview"             : "overview",
+        "Customer analysis"    : "analysis",
+        "Retention priorities" : "risk",
+        "Customer prediction"  : "prediction",
+        "Model performance"    : "model",
     }
-    selected = st.sidebar.radio("Navigate", list(pages.keys()))
+    selected = st.sidebar.radio("Workspace navigation", list(pages.keys()),
+                                key="workspace_navigation", label_visibility="collapsed")
     page_key = pages[selected]
 
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Dataset Path**")
-    data_path = st.sidebar.text_input("CSV Path", value=DATASET_PATH)
+    with st.sidebar.expander("Data source"):
+        data_path = st.text_input("CSV path", value=DATASET_PATH,
+                                  help="Path to the Telco Customer Churn CSV on this machine.")
+        st.caption("IBM Telco Customer Churn · sample dataset")
 
     # ---- Load & Process Data ----
     try:
@@ -1256,7 +1074,7 @@ def main():
                 "X_test"    : X_test,
                 "y_test"    : y_test,
             }, MODEL_PATH)
-        st.success("✅ Model trained and saved. Subsequent loads will be instant.")
+        st.success("Model trained and saved. Your workspace is ready.")
     else:
         saved = pipeline
         pipeline   = saved["pipeline"]
@@ -1272,6 +1090,7 @@ def main():
     kpis     = calculate_kpis(df)
     fi_df    = get_feature_importance(pipeline, cat_cols, num_cols)
     insights = generate_business_insights(df, kpis, fi_df, pred_df)
+    sidebar_status(best_name, results[best_name]["ROC-AUC"], len(df))
 
     # ---- Render selected page ----
     if   page_key == "overview"   : page_overview(df, kpis, pred_df, insights, cleaning_log)
@@ -1281,10 +1100,9 @@ def main():
     elif page_key == "model"      : page_model_performance(results, X_test, y_test, best_name)
 
     # Footer
-    st.sidebar.markdown("---")
     st.sidebar.markdown(
-        "<small>© 2024 Shivam Singh | IBM SkillsBuild<br>"
-        "Telecom Churn Intelligence v1.0</small>",
+        '<div class="sidebar-footer"><strong>IBM SkillsBuild</strong><br>'
+        'Data Analytics with AI<br>Built by Shivam Singh</div>',
         unsafe_allow_html=True
     )
 
